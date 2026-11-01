@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+adapters/
+datasets/
+registry.db
+data/
+.env
+.DS_Store
