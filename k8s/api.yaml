@@ -28,6 +28,20 @@ spec:
               mountPath: /data
             - name: hf-cache
               mountPath: /root/.cache/huggingface
+          startupProbe:
+            httpGet: { path: /health, port: 8000 }
+            periodSeconds: 5
+            failureThreshold: 30      # allows up to 150s to start
+          readinessProbe:
+            httpGet: { path: /health, port: 8000 }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: 8000 }
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits:   { cpu: "1",  memory: 2Gi }
       volumes:
         - name: app-data
           persistentVolumeClaim:

@@ -26,6 +26,9 @@ spec:
               mountPath: /data
             - name: hf-cache
               mountPath: /root/.cache/huggingface
+          resources:
+            requests: { cpu: 500m, memory: 1Gi }
+            limits:   { cpu: "2",  memory: 3Gi }
       volumes:
         - name: app-data
           persistentVolumeClaim:

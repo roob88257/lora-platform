@@ -7,11 +7,10 @@ from sqlalchemy import create_engine, Column, String, DateTime
 from sqlalchemy.orm import sessionmaker, declarative_base
 from fastapi import FastAPI, HTTPException
 from worker.tasks import train_lora_adapter
-from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from api.adapters import AdapterManager
 import os
 import threading
-from collections import OrderedDict
 
 
 app = FastAPI()
@@ -31,30 +30,6 @@ class AdapterJob(Base):
     dataset_path = Column(String)
     adapter_path = Column(String, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-
-ADAPTER_CACHE_SIZE = 3
-
-class AdapterCache:
-    def __init__(self, max_size: int):
-        self.max_size = max_size
-        self._cache = OrderedDict()
-        self._lock = threading.Lock()
-
-    def get_or_load(self, job_id: str, base_model, adapter_path: str):
-        with self._lock:
-            if job_id in self._cache:
-                self._cache.move_to_end(job_id)
-                return self._cache[job_id]
-
-            if len(self._cache) >= self.max_size:
-                evicted_id, _ = self._cache.popitem(last=False)
-                print(f"Evicting adapter {evicted_id} to make room for {job_id}")
-
-            adapter = PeftModel.from_pretrained(base_model, adapter_path)
-            self._cache[job_id] = adapter
-            return adapter
-
-_adapter_cache = AdapterCache(max_size=ADAPTER_CACHE_SIZE)
 
 Base.metadata.create_all(engine)
 @app.get("/health")
@@ -102,8 +77,18 @@ def job_status(job_id: str):
         "dataset_path": job.dataset_path,
     }
 
-_base_model_cache = {}
+_managers = {}              # base_model name -> (AdapterManager, tokenizer)
+_managers_lock = threading.Lock()
 
+
+def _get_manager(base_model: str):
+    if base_model not in _managers:
+        with _managers_lock:
+            if base_model not in _managers:
+                tok = AutoTokenizer.from_pretrained(base_model)
+                base = AutoModelForCausalLM.from_pretrained(base_model)
+                _managers[base_model] = (AdapterManager(base), tok)
+    return _managers[base_model]
 
 
 class GenerateRequest(BaseModel):
@@ -121,18 +106,8 @@ def generate(req: GenerateRequest):
     if not job or job.status != "ready":
         raise HTTPException(status_code=404, detail="adapter not found or not ready")
 
-    if job.base_model not in _base_model_cache:
-        tok = AutoTokenizer.from_pretrained(job.base_model)
-        base = AutoModelForCausalLM.from_pretrained(job.base_model)
-        _base_model_cache[job.base_model] = (base, tok)
-
-    base_model, tokenizer = _base_model_cache[job.base_model]
-
-    model = _adapter_cache.get_or_load(req.job_id, base_model, job.adapter_path)
-
-    inputs = tokenizer(req.prompt, return_tensors="pt")
-    outputs = model.generate(**inputs, max_new_tokens=req.max_new_tokens)
-    text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    manager, tokenizer = _get_manager(job.base_model)
+    text = manager.generate(req.job_id, job.adapter_path, tokenizer, req.prompt, req.max_new_tokens)
 
     return {"text": text, "job_id": req.job_id}
 
