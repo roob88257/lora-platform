@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      containers:
+        - name: worker
+          image: lora-platform:latest
+          imagePullPolicy: IfNotPresent
+          command: ["celery", "-A", "worker.tasks", "worker", "--loglevel=info", "--concurrency=1"]
+          workingDir: /data
+          env:
+            - name: REDIS_URL
+              value: redis://redis:6379/0
+          volumeMounts:
+            - name: app-data
+              mountPath: /data
+            - name: hf-cache
+              mountPath: /root/.cache/huggingface
+      volumes:
+        - name: app-data
+          persistentVolumeClaim:
+            claimName: app-data
+        - name: hf-cache
+          persistentVolumeClaim:
+            claimName: hf-cache
